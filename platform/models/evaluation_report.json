@@ -1,0 +1,32 @@
+{
+  "generated_at_utc": "2026-08-31T18:41:17.713042+00:00",
+  "model_type": "TF-IDF (ngram_range=(1,2), sublinear_tf=True) + LogisticRegression (balanced, lbfgs)",
+  "evaluation": {
+    "evaluation_status": "valid_test_split",
+    "accuracy": 0.3333333333333333,
+    "precision": 0.3333333333333333,
+    "recall": 1.0,
+    "f1_score": 0.5,
+    "confusion_matrix": [
+      [
+        0,
+        2
+      ],
+      [
+        0,
+        1
+      ]
+    ],
+    "total_samples": 12,
+    "train_samples": 9,
+    "test_samples": 3,
+    "classes": [
+      0,
+      1
+    ],
+    "class_labels": {
+      "0": "Human",
+      "1": "AI-generated"
+    }
+  }
+}
