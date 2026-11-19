@@ -12,7 +12,7 @@ BASE_DIR: Path = Path(__file__).resolve().parent
 
 # Automatically load environment variables from .env file if present
 env_path = BASE_DIR / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=env_path, override=True)
 
 # Processing Queue Settings
 MAX_PROCESSING_ATTEMPTS: int = int(os.environ.get("AISHIELD_MAX_ATTEMPTS", 3))

@@ -1427,6 +1427,45 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
                 limit = 50
 
             events = broker.get_recent_events(limit=limit, source_filter=source_filter) if broker else []
+
+            # If in-memory broker is empty (e.g. freshly started server), fall back to recent analyzed posts from DB
+            if not events:
+                try:
+                    from database.db import db_session
+                    forensic_srv = getattr(current_app, "forensic_service", getattr(app, "forensic_service", None))
+                    db_path = forensic_srv.db_path if forensic_srv else None
+                    with db_session(db_path) as conn:
+                        query = """
+                            SELECT sp.id AS source_post_id, sp.source, sp.source_id, sp.source_url,
+                                   sp.author_id, sp.author_name, sp.content, sp.status,
+                                   sp.processed_at, sp.ingested_at, sp.incident_id,
+                                   COALESCE(inc.threat_score, 0.0) AS threat_score,
+                                   COALESCE(inc.ai_probability, 0.0) AS ai_probability,
+                                   COALESCE(inc.risk_level, 'LOW') AS risk_level,
+                                   COALESCE(inc.category, 'Normal') AS category
+                            FROM source_posts sp
+                            LEFT JOIN incidents inc ON sp.incident_id = inc.incident_id
+                            WHERE sp.status = 'ANALYZED'
+                        """
+                        params = []
+                        if source_filter and source_filter.lower() != "all":
+                            query += " AND LOWER(sp.source) = ?"
+                            params.append(source_filter.lower())
+                        query += " ORDER BY sp.id DESC LIMIT ?"
+                        params.append(limit)
+
+                        rows = conn.execute(query, params).fetchall()
+                        events = [
+                            {
+                                "type": "source_post",
+                                "data": dict(r),
+                                "timestamp": r["processed_at"] or r["ingested_at"],
+                            }
+                            for r in rows
+                        ]
+                except Exception as db_fallback_err:
+                    logger.debug("Database fallback for live feed failed: %s", db_fallback_err)
+
             return jsonify({
                 "success": True,
                 "events": events,
