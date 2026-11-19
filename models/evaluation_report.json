@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-08-31T18:41:17.713042+00:00",
+  "generated_at_utc": "2026-11-19T17:15:06.114465+00:00",
   "model_type": "TF-IDF (ngram_range=(1,2), sublinear_tf=True) + LogisticRegression (balanced, lbfgs)",
   "evaluation": {
     "evaluation_status": "valid_test_split",
