@@ -79,6 +79,7 @@ class MastodonConnector(BaseConnector):
         self._stop_event = threading.Event()
         self._threads: List[threading.Thread] = []
         self._active_sessions: List[requests.Session] = []
+        self._stream_states: Dict[str, str] = {}
         self._lock = threading.RLock()
 
         # Observability Metrics
@@ -97,8 +98,21 @@ class MastodonConnector(BaseConnector):
 
     @property
     def state(self) -> str:
-        """Return current connector connection state."""
-        return self._state
+        """Return current connector connection state aggregated across active streams."""
+        with self._lock:
+            if self._state == self.STATE_STOPPED:
+                return self.STATE_STOPPED
+            if not self.enabled:
+                return self.STATE_DISCONNECTED
+            if self._stream_states:
+                states = set(self._stream_states.values())
+                if self.STATE_CONNECTED in states:
+                    return self.STATE_CONNECTED
+                if self.STATE_CONNECTING in states:
+                    return self.STATE_CONNECTING
+                if self.STATE_ERROR in states:
+                    return self.STATE_ERROR
+            return self._state
 
     @property
     def subscription_state(self) -> str:
@@ -350,6 +364,8 @@ class MastodonConnector(BaseConnector):
             headers["Authorization"] = f"Bearer {self._access_token}"
 
         while not self._stop_event.is_set():
+            with self._lock:
+                self._stream_states[endpoint_url] = self.STATE_CONNECTING
             self._state = self.STATE_CONNECTING
 
             target_url = endpoint_url
@@ -370,24 +386,28 @@ class MastodonConnector(BaseConnector):
                 with session.get(target_url, headers=headers, stream=True, timeout=(10.0, 60.0)) as resp:
                     if resp.status_code == 401:
                         logger.error("Mastodon authorization failed (HTTP 401). Check MASTODON_ACCESS_TOKEN.")
-                        self._state = self.STATE_ERROR
                         with self._lock:
+                            self._stream_states[endpoint_url] = self.STATE_ERROR
                             self.connection_errors += 1
+                        self._state = self.STATE_ERROR
                         # Wait max backoff before retrying
                         self._stop_event.wait(timeout=self.max_backoff)
                         continue
 
                     if resp.status_code != 200:
                         logger.warning("Mastodon stream returned HTTP %s for %s.", resp.status_code, target_url)
-                        self._state = self.STATE_ERROR
                         with self._lock:
+                            self._stream_states[endpoint_url] = self.STATE_ERROR
                             self.connection_errors += 1
+                        self._state = self.STATE_ERROR
                         self._stop_event.wait(timeout=backoff)
                         backoff = min(self.max_backoff, backoff * 2.0)
                         continue
 
+                    with self._lock:
+                        self._stream_states[endpoint_url] = self.STATE_CONNECTED
+                        self.last_connected_at = datetime.now(timezone.utc).isoformat()
                     self._state = self.STATE_CONNECTED
-                    self.last_connected_at = datetime.now(timezone.utc).isoformat()
                     backoff = self.initial_backoff
                     logger.info("Mastodon stream connected: %s", target_url)
                     logger.info("Mastodon subscription established for endpoint: %s (mode: %s)", target_url, self.stream_mode)
@@ -434,10 +454,18 @@ class MastodonConnector(BaseConnector):
                                 data_buffer = []
                                 event_name = None
 
+            except requests.exceptions.ReadTimeout:
+                if self._stop_event.is_set():
+                    break
+                # An idle read timeout on a quiet stream is normal for SSE; simply reconnect quietly
+                logger.debug("Mastodon stream idle timeout for %s, reconnecting...", target_url)
+                continue
+
             except Exception as exc:
                 if self._stop_event.is_set():
                     break
                 with self._lock:
+                    self._stream_states[endpoint_url] = self.STATE_ERROR
                     self.connection_errors += 1
                 self._state = self.STATE_ERROR
                 logger.warning("Mastodon streaming error: %s. Retrying in %.1fs...", exc, backoff)
